@@ -1,0 +1,10 @@
+[Unit]
+Description=Hindsight bank export backup (per-bank ZIP)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# 서버의 일반 사용자로 바꾼다(docker 그룹에 속해야 한다)
+User=ubuntu
+ExecStart=/opt/hindsight/hindsight-backup.sh

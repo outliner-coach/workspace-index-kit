@@ -1,0 +1,7 @@
+# HTTPS 입구. 인증은 Hindsight 가 Bearer 공유키로 한다(/health 만 키 없이 열림).
+{$MEMORY_DOMAIN} {
+	encode gzip
+	@hidden path /openapi.json /docs* /redoc*
+	respond @hidden 404
+	reverse_proxy hindsight:8888
+}

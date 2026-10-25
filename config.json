@@ -1,0 +1,5 @@
+{
+  "default_machine": "main",
+  "groups": ["업무", "사이드 프로젝트", "생활", "학습·실험"],
+  "bundle_dirs": ["work", "personal"]
+}

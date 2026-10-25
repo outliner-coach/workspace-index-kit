@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>workspace-index 오케스트레이션 한눈에 보기</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+:root{
+  --bg:#f5f3ee; --ink:#1b1f2a; --mute:#6b7280; --line:#e2ded4; --card:#fff;
+  --c1:#3d5afe; --c2:#00a991; --c3:#ff8a00; --c4:#e8445a; --c5:#8b5cf6;
+  --c1s:#e8ecff; --c2s:#dcf5f0; --c3s:#fff0dc; --c4s:#fde4e8; --c5s:#efe8ff;
+}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--ink);font-family:Pretendard,-apple-system,"Noto Sans KR",sans-serif;font-size:13px;line-height:1.5}
+code,.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px}
+.wrap{max-width:1320px;margin:0 auto;padding:20px 26px 16px;display:grid;gap:12px}
+
+/* header */
+header{display:grid;grid-template-columns:1fr auto;align-items:end;gap:20px}
+.kicker{font-weight:800;letter-spacing:.14em;font-size:11px;color:var(--c1)}
+h1{font-size:28px;line-height:1.25;letter-spacing:-.02em;font-weight:800}
+h1 em{font-style:normal;background:linear-gradient(transparent 60%,#ffd76a 60%)}
+.plug{background:var(--ink);color:#fff;border-radius:14px;padding:9px 14px;display:flex;gap:12px;align-items:center}
+.plug b{font-size:18px;display:block;line-height:1.2}
+.plug span{font-size:11px;opacity:.75;display:block}
+.plug .ic{font-size:22px}
+
+/* before / after strip */
+.ba{display:grid;grid-template-columns:1fr 44px 1fr;align-items:stretch;border-top:3px solid var(--ink);padding-top:12px}
+.ba > div{border-radius:14px;padding:10px 14px;display:flex;align-items:center;gap:12px}
+.ba .before{background:#ebe8e1;color:#555}
+.ba .after{background:var(--ink);color:#fff}
+.ba .tag{font-size:11px;font-weight:800;padding:3px 9px;border-radius:999px;white-space:nowrap}
+.ba .before .tag{background:#d9d4c9;color:#555}
+.ba .after .tag{background:#ffd76a;color:var(--ink)}
+.ba p{font-size:13.5px}
+.ba .mid{justify-content:center;font-size:24px;font-weight:800;color:#b9b3a5;padding:0}
+.say{background:#fff;color:var(--ink);border-radius:10px 10px 10px 3px;padding:3px 10px;font-weight:800;white-space:nowrap}
+
+/* pillars */
+.pillars{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+.pl{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:12px 13px 11px;display:flex;flex-direction:column;gap:7px;position:relative;overflow:hidden;transition:.2s}
+.pl:hover{transform:translateY(-3px);box-shadow:0 10px 22px rgba(0,0,0,.07)}
+.pl::before{content:"";position:absolute;left:0;top:0;right:0;height:5px;background:var(--c)}
+.pl .hd{display:flex;align-items:center;gap:9px}
+.pl .ic{width:36px;height:36px;border-radius:11px;display:grid;place-items:center;font-size:19px;background:var(--cs);flex:none}
+.pl .hd b{font-size:16px;display:block;line-height:1.2}
+.pl .hd span{font-size:11.5px;color:var(--mute)}
+.pl .no{font-size:11.5px;color:#8a8a8a;background:#f4f2ed;border-radius:9px;padding:6px 9px;line-height:1.45}
+.pl .no::before{content:"✗ 없을 때  ";font-weight:800;color:var(--c4)}
+.pl .yes{font-size:12px;background:var(--cs);border-radius:9px;padding:6px 9px;line-height:1.45}
+.pl .yes::before{content:"✓ 있을 때  ";font-weight:800;color:var(--c)}
+.pl .proof{margin-top:auto;font-size:11px;font-weight:700;color:var(--c);display:flex;gap:5px;align-items:center}
+.p1{--c:var(--c1);--cs:var(--c1s)} .p2{--c:var(--c2);--cs:var(--c2s)} .p3{--c:var(--c5);--cs:var(--c5s)}
+.p4{--c:var(--c4);--cs:var(--c4s)} .p5{--c:var(--c3);--cs:var(--c3s)}
+
+/* bottom */
+.bottom{display:grid;grid-template-columns:.92fr 1.08fr;gap:12px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:13px 14px 12px;display:flex;flex-direction:column}
+.sectitle{font-weight:800;font-size:13.5px;display:flex;align-items:center;gap:8px;margin-bottom:9px}
+.sectitle .n{background:var(--ink);color:#fff;border-radius:6px;padding:1px 7px;font-size:11px}
+.sectitle small{font-weight:500;color:var(--mute);font-size:11.5px}
+
+/* flow */
+.flow{display:flex;flex-direction:column;gap:4px;flex:1;justify-content:space-around}
+.fs{display:grid;grid-template-columns:26px 92px 1fr 58px;gap:9px;align-items:center;padding:7px 8px;border-radius:11px;border:2px solid transparent;transition:.3s}
+.fs i{font-style:normal;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:800;font-size:11px;background:var(--k)}
+.fs b{font-size:12.5px}
+.fs .d{font-size:12px;color:#333}
+.fs .d .q{background:#fff;border:1px solid var(--line);border-radius:8px 8px 8px 2px;padding:1px 8px;font-weight:700}
+.fs .d mark{background:#ffe9a8;border-radius:3px;padding:0 3px}
+.fs .lay{font-size:10px;font-weight:800;text-align:center;border-radius:6px;padding:2px 0;color:#fff;background:var(--k)}
+.fs .lay.none{background:transparent;color:transparent}
+.fs.on{border-color:var(--ink);background:#faf9f6}
+.f1{--k:var(--c3)} .f2{--k:var(--c1)} .f3{--k:var(--c2)} .f4{--k:var(--c5)} .f5{--k:var(--ink)}
+.fork{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.fork span{font-size:11px;background:var(--c4s);color:#a3263a;border-radius:999px;padding:2px 9px;font-weight:700}
+
+/* system diagram */
+.sys{display:grid;grid-template-columns:150px 1fr 150px;grid-template-rows:auto 34px auto;gap:0 10px}
+.node{border-radius:13px;padding:8px 10px;font-size:11.5px;border:1.5px solid var(--line);background:#faf9f6}
+.node b{display:block;font-size:12.5px;margin-bottom:2px}
+.node .s{color:var(--mute);font-size:10.5px;display:block;line-height:1.4}
+.toprow{grid-column:1/4;grid-row:1;display:grid;grid-template-columns:150px 22px 1fr 22px 150px;align-items:center}
+.gh{background:var(--ink);color:#fff;border-color:var(--ink);display:flex;align-items:center;gap:10px;justify-content:center}
+.gh .s{color:#c9ccd6}
+.wire-h{height:2px;background:repeating-linear-gradient(90deg,#b9b3a5 0 6px,transparent 6px 11px)}
+.downs{grid-column:1/4;grid-row:2;display:grid;grid-template-columns:150px 1fr 150px;gap:0 10px}
+.vw{position:relative;display:flex;justify-content:center}
+.vw::before{content:"";width:2px;height:100%;background:repeating-linear-gradient(180deg,var(--c5) 0 5px,transparent 5px 9px)}
+.vw::after{content:"";position:absolute;top:0;width:8px;height:8px;border-radius:50%;background:var(--c5);animation:drop 1.6s linear infinite}
+.vw.up::after{animation-direction:reverse}
+@keyframes drop{from{top:-4px;opacity:0}20%{opacity:1}to{top:calc(100% - 4px);opacity:.2}}
+.downlab{display:flex;align-items:center;justify-content:center;font-size:10.5px;color:var(--c5);font-weight:700;text-align:center;gap:14px}
+.server{grid-column:1/4;grid-row:3;border:2px solid var(--ink);border-radius:16px;padding:9px 11px 10px;background:#fff;position:relative}
+.server .lab{position:absolute;top:-10px;left:14px;background:var(--ink);color:#fff;font-size:10.5px;font-weight:800;padding:1px 9px;border-radius:999px}
+.srow{display:grid;grid-template-columns:100px 16px 1fr 16px 1.05fr;align-items:stretch;margin-top:6px}
+.srow .ar{display:flex;align-items:center;justify-content:center;color:#b9b3a5;font-weight:800}
+.hs{background:var(--c5s);border-color:#d6c8fb}
+.banks{display:flex;flex-wrap:wrap;gap:3px;margin-top:4px}
+.banks span{font-family:Menlo,monospace;font-size:9.5px;background:#fff;border:1px solid #d6c8fb;border-radius:5px;padding:0 5px}
+.bk{background:var(--c2s);border-color:#b6e6dc}
+.others{margin-top:7px;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--mute);border-top:1px dashed var(--line);padding-top:6px}
+.others .chip{background:#f4f2ed;border-radius:6px;padding:1px 7px;color:#555;font-weight:600}
+.safe{display:flex;gap:8px;margin-top:8px}
+.safe div{flex:1;background:#f4f2ed;border-radius:10px;padding:5px 9px;font-size:11px;line-height:1.45}
+.safe b{display:block;font-size:11.5px}
+footer{font-size:10.5px;color:var(--mute);display:flex;justify-content:space-between}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <div class="kicker">WORKSPACE-INDEX · AI 오케스트레이션</div>
+      <h1>폴더 50개, 컴퓨터 2대, 세션 수백 번이어도<br>AI가 <em>맞는 곳에서, 하던 대로, 안전하게</em> 일을 이어 간다</h1>
+    </div>
+    <div class="plug"><div class="ic">🔌</div><div><b>프로젝트 폴더 변경 0개</b><span>별도 저장소 + import 한 줄로 붙이고 뗀다</span></div></div>
+  </header>
+
+  <div class="ba">
+    <div class="before"><span class="tag">없을 때</span><p>사람이 매번 <b>어느 폴더인지 · 뭘 먼저 읽을지 · 지난번 어디까지 했는지</b> 설명한다</p></div>
+    <div class="mid">→</div>
+    <div class="after"><span class="tag">있을 때</span><span class="say">"가계부 차트 고쳐줘"</span><p>한 줄이면 AI가 폴더·문서·지난 맥락을 찾아 이어서 일한다</p></div>
+  </div>
+
+  <div class="pillars">
+    <div class="pl p1">
+      <div class="hd"><div class="ic">🎯</div><div><b>정확하게</b><span>맞는 폴더로 간다</span></div></div>
+      <div class="no">옛 사본 폴더에 들어가 엉뚱한 곳을 고친다</div>
+      <div class="yes">지도에서 <b>정본</b>을 찾아 절대 경로로 보낸다. 애매하면 <b>멈추고 묻는다</b></div>
+      <div class="proof">→ 후보 0개·2개↑면 진행 안 함</div>
+    </div>
+    <div class="pl p2">
+      <div class="hd"><div class="ic">🪶</div><div><b>가볍게</b><span>필요한 만큼만 읽는다</span></div></div>
+      <div class="no">전체를 파악시키려 문서를 잔뜩 넣는다</div>
+      <div class="yes"><b>얇은 지도 → 카드 1장 → 그 프로젝트 문서</b> 순으로 내려간다</div>
+      <div class="proof">→ 프로젝트가 늘어도 세션은 가볍게</div>
+    </div>
+    <div class="pl p3">
+      <div class="hd"><div class="ic">🧠</div><div><b>이어지게</b><span>세션·컴퓨터를 넘어 기억</span></div></div>
+      <div class="no">새 세션은 백지. 어제 결정·함정을 다시 설명</div>
+      <div class="yes">세션을 열면 <b>지난 결정·함정·남은 일</b>이 자동으로 들어온다</div>
+      <div class="proof">→ 카드 이름 = 기억 은행 이름</div>
+    </div>
+    <div class="pl p4">
+      <div class="hd"><div class="ic">🛡️</div><div><b>안전하게</b><span>경계가 정해져 있다</span></div></div>
+      <div class="no"><code>.env</code>·개인정보 파일도 열 수 있다</div>
+      <div class="yes"><b>열지 말 파일·읽기 범위</b>를 위임에 명시. 루트는 코드를 만지지 않는다</div>
+      <div class="proof">→ 기억 저장은 주 세션만(토큰)</div>
+    </div>
+    <div class="pl p5">
+      <div class="hd"><div class="ic">🔧</div><div><b>저절로</b><span>지도가 낡지 않는다</span></div></div>
+      <div class="no">손으로 쓴 목록은 금방 실제와 어긋난다</div>
+      <div class="yes"><b>build</b>가 지도를 만들고 <b>check</b>가 실제 폴더와 대조한다</div>
+      <div class="proof">→ 세션 열 때마다 자동 점검</div>
+    </div>
+  </div>
+
+  <div class="bottom">
+    <div class="tile">
+      <div class="sectitle"><span class="n">어떻게</span>요청 한 줄이 폴더에 닿기까지 <small>· 오른쪽 칸 = 그때 읽는 겹</small></div>
+      <div class="flow">
+        <div class="fs f1"><i>1</i><b>요청</b><div class="d"><span class="q">"가계부 지출 차트가 이상해"</span></div><div class="lay none">-</div></div>
+        <div class="fs f2"><i>2</i><b>지도에서 찾기</b><div class="d">별칭 대조 → <code>budget-book</code> ← <mark>가계부</mark></div><div class="lay">1겹 지도</div></div>
+        <div class="fs f3"><i>3</i><b>카드 확인</b><div class="d">active · 12일 전 확인 · <code>.env</code> 열지 말 것</div><div class="lay">2겹 카드</div></div>
+        <div class="fs f4"><i>4</i><b>위임</b><div class="d"><code>~/ai/budget-book</code> · CLAUDE.md부터 읽기 · 할 일 / 하지 말 것</div><div class="lay none">-</div></div>
+        <div class="fs f5"><i>5</i><b>작업</b><div class="d">executor 구현 → reviewer 검토 → verifier 확인</div><div class="lay">3겹 문서</div></div>
+      </div>
+      <div class="fork"><span>✋ 후보 0개 → 묻기</span><span>☝️ 2개↑ → 고르게</span><span>↪ 옛 사본 → 정본으로</span><span>🔍 30일↑ → 다시 확인</span></div>
+    </div>
+
+    <div class="tile">
+      <div class="sectitle"><span class="n">구성</span>맥 두 대 + GitHub + 서버 한 대 <small>· 보라 점 = 기억이 오가는 길</small></div>
+      <div class="sys">
+        <div class="toprow">
+          <div class="node"><b>💻 회사 맥</b><span class="s">~/ai/budget-book</span></div>
+          <div class="wire-h"></div>
+          <div class="node gh"><div style="font-size:20px">🗂️</div><div><b>GitHub 비공개 저장소</b><span class="s">카드 · 규칙 · 지도 · 맥별 위치표 — 고치기 전 pull, 커밋 뒤 push</span></div></div>
+          <div class="wire-h"></div>
+          <div class="node"><b>💻 집 맥</b><span class="s">~/ai/gagyebu<br><span style="color:var(--c1)">이름 달라도 같은 카드</span></span></div>
+        </div>
+        <div class="downs">
+          <div class="vw"></div>
+          <div class="downlab"><span>⬇ 세션 시작: 최근 기억 5건</span><span>⬆ "세션 종료": 인계문 저장</span></div>
+          <div class="vw up"></div>
+        </div>
+        <div class="server">
+          <span class="lab">☁️ 개인 클라우드 서버 · Docker compose</span>
+          <div class="srow">
+            <div class="node"><b>🔐 HTTPS 입구</b><span class="s">Caddy<br>공유키 없으면 거절</span></div>
+            <div class="ar">›</div>
+            <div class="node hs"><b>🧠 기억 저장소 API</b><span class="s">Hindsight · 의미 검색 + 내장 DB · 프로젝트마다 은행</span>
+              <div class="banks"><span>budget-book</span><span>cafe-booking</span><span>photo-sorter</span><span>reading-log</span><span>…</span></div>
+            </div>
+            <div class="ar">›</div>
+            <div class="node bk"><b>💾 이중 백업</b><span class="s">03:30 서버가 은행별 백업(14일)<br>09:00 맥이 당겨 와 보관(60일)</span></div>
+          </div>
+          <div class="others">같은 서버의 다른 서비스 <span class="chip">노트 앱</span><span class="chip">위키 동기화</span><span class="chip">…</span> → <b style="color:var(--ink)">서버 지도</b>로 소유·배포 절차 관리, 남의 서비스는 건드리지 않음</div>
+        </div>
+      </div>
+      <div class="safe">
+        <div><b>📴 서버가 끊겨도</b>"닿지 못했습니다" 한 줄 뒤 작업은 계속. 저장 실패분은 대기열 → 다음 세션에 재전송</div>
+        <div><b>📄 파일이 정본</b>PLAN·PROGRESS가 원본, 서버 기억은 "빨리 떠올리는 층". 실명·키는 저장 금지</div>
+      </div>
+    </div>
+  </div>
+
+  <footer><span>단계·기둥에 마우스를 올려 보세요</span><span>예시의 프로젝트·폴더·서비스 이름은 모두 가상입니다.</span></footer>
+</div>
+
+<script>
+// 흐름 단계를 차례로 강조한다. 마우스를 올리면 그 단계에 멈춘다.
+const steps=[...document.querySelectorAll('.fs')];
+let i=0, paused=false;
+const show=n=>steps.forEach((s,j)=>s.classList.toggle('on',j===n));
+show(0);
+setInterval(()=>{ if(!paused){ i=(i+1)%steps.length; show(i); } },1600);
+steps.forEach((s,j)=>{
+  s.addEventListener('mouseenter',()=>{paused=true;i=j;show(j);});
+  s.addEventListener('mouseleave',()=>{paused=false;});
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+---
+name: my-project
+path: my-project
+group: 사이드 프로젝트
+status: active
+summary: 한 줄 요약 — 지도 표에 그대로 실려 라우팅 단서가 된다
+stack: [Python]
+entry_docs: [CLAUDE.md, README.md]
+covers: []
+related: []
+aliases: [my-project, 내 프로젝트, 한글 별칭]
+sensitive: none
+read_scope: []
+last_activity: 2000-01-01
+last_verified: 2026-01-01
+---
+## 한눈에
+- 무엇이고 지금 어떤 상태인지 몇 줄.
+
+## 들어갈 때 읽을 것
+- `CLAUDE.md` — 이 파일이 무엇을 주는지
+- `README.md` — 이 파일이 무엇을 주는지
+
+## 주의
+- 함정, 민감 파일명(내용은 적지 않는다), 폴더에서 발견한 문제.
+
+## 관련 폴더
+- 대신 설명하는 폴더(covers)가 있으면 관계를 적는다. 없으면 "대신 설명하는 폴더 없음."

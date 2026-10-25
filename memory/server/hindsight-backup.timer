@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily Hindsight bank export at 03:30 (server local time)
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
