@@ -2,7 +2,7 @@
 """hindsight-mem: 맥에서 Hindsight 기억 저장소를 쓰는 명령.
 
 Python 3.9 표준 라이브러리만 쓴다. 비밀값(API 키)은 어디에도 출력하지 않는다.
-부명령: resolve-bank, recent, recall, retain, forget, flush-queue, session-start-context.
+부명령: resolve-bank, recent, recall, retain, forget, flush-queue, summary-sync, session-start-context.
 """
 import argparse
 import datetime
@@ -28,6 +28,11 @@ API = {
     "documents": "/v1/default/banks/{bank}/documents",
     "document": "/v1/default/banks/{bank}/documents/{doc}",
     "memories_list": "/v1/default/banks/{bank}/memories/list",
+    "banks": "/v1/default/banks",
+    "mental_models": "/v1/default/banks/{bank}/mental-models",
+    "mental_model": "/v1/default/banks/{bank}/mental-models/{doc}",
+    "mental_model_refresh": "/v1/default/banks/{bank}/mental-models/{doc}/refresh",
+    "mental_model_clear": "/v1/default/banks/{bank}/mental-models/{doc}/clear",
 }
 DEFAULT_URL = ""   # 서버 주소는 ~/.config/hindsight/env 의 HINDSIGHT_URL 로 정한다
 RESERVED_BANKS = ("workspace-index", "restore-test")
@@ -42,6 +47,23 @@ TEXT_KEYS = ("text", "content", "original_text", "raw_text")
 TIME_KEYS = ("updated_at", "created_at", "timestamp", "mentioned_at", "occurred_start", "date")
 RECENT_CAP = 10000
 CMD_PATH = "~/.claude/scripts/hindsight-mem"
+RECENT_HOOK_LIMIT = 3          # 시작 컨텍스트의 최근 기억 건수(요약이 생겨 5→3)
+
+# 프로젝트 요약(Hindsight mental model). 은행마다 하나, 고정 id. 조정값은 여기서 고친다.
+SUMMARY_ID = "project-summary"
+SUMMARY_NAME = "프로젝트 요약"
+SUMMARY_QUERY = (
+    "이 프로젝트의 현재 상태는 어떤가? 다음에 할 일은 무엇인가? "
+    "작업할 때 알아 둘 함정이나 주의할 점은 무엇인가? "
+    "답은 반드시 한국어로, 짧은 소제목과 목록을 쓴 마크다운으로 써라.")
+SUMMARY_MAX_TOKENS = 800
+SUMMARY_TRIGGER = {"refresh_after_consolidation": True, "mode": "full"}
+SUMMARY_SKIP_BANKS = ("restore-test",)
+SUMMARY_CHARS = 4000           # 시작 컨텍스트에 넣는 요약 본문 상한(HINDSIGHT_SUMMARY_CHARS)
+SUMMARY_SECONDS = 3.0          # 시작 훅의 요약 조회 상한(HINDSIGHT_SUMMARY_SECONDS)
+SUMMARY_MIN_SECONDS = 1.0      # 이보다 짧게 남으면 요약 조회를 건너뛴다
+SUMMARY_NOTE = "언어모델이 기억에서 만든 요약이다. 최근 기억이나 프로젝트 파일과 어긋나면 그쪽을 따른다."
+SUMMARY_STALE_NOTICE = "요약에 지운 내용이 남아 있을 수 있음(다음 갱신 때 사라짐)"
 
 
 class BankError(Exception):
@@ -544,6 +566,97 @@ def fetch_recent(bank, limit=5, deadline=None):
 
 
 # ---------------------------------------------------------------------------
+# 프로젝트 요약(mental model)
+
+
+def summary_target_name(bank):
+    """요약을 둘 수 있는 은행 이름인가: 카드 name(removed 포함) 또는 workspace-index. restore-test 제외."""
+    if bank in SUMMARY_SKIP_BANKS:
+        return False
+    return bank == "workspace-index" or bank in set(c["name"] for c in load_cards())
+
+
+def get_summary(bank, timeout=None):
+    """요약 단건(dict)을 돌려준다. 없으면(404) None. 그 밖의 실패는 예외."""
+    try:
+        resp = http("GET", api_path("mental_model", bank, SUMMARY_ID), timeout=timeout)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+    return resp if isinstance(resp, dict) else {}
+
+
+def ensure_summary(bank, timeout=None):
+    """없으면 만든다. 'created' 또는 'exists'를 돌려주고, 실패는 예외로 올린다."""
+    if get_summary(bank, timeout=timeout) is not None:
+        return "exists"
+    body = {
+        "id": SUMMARY_ID,
+        "name": SUMMARY_NAME,
+        "source_query": SUMMARY_QUERY,
+        "max_tokens": SUMMARY_MAX_TOKENS,
+        "trigger": dict(SUMMARY_TRIGGER),
+    }
+    try:
+        http("POST", api_path("mental_models", bank), body=body, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        if e.code == 409:   # 그 사이 다른 세션이 만들었다
+            return "exists"
+        raise
+    return "created"
+
+
+def rebuild_summary(bank):
+    """요약이 있으면 비운 뒤 처음부터 다시 갱신을 요청한다. 'none'·'requested'. 실패는 예외."""
+    if get_summary(bank) is None:
+        return "none"
+    http("POST", api_path("mental_model_clear", bank, SUMMARY_ID))
+    http("POST", api_path("mental_model_refresh", bank, SUMMARY_ID))
+    return "requested"
+
+
+def _parse_iso(value):
+    """ISO 시각(UTC 'Z', 소수 초 자릿수 제각각)을 3.9에서도 읽는다. 실패하면 None."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    v = value.strip().replace("Z", "+00:00").replace("z", "+00:00")
+    m = re.match(r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?)(\.\d+)?(.*)$", v)
+    if not m:
+        return None
+    frac = m.group(2) or ""
+    if frac:
+        frac = "." + (frac[1:] + "000000")[:6]
+    try:
+        dt = datetime.datetime.fromisoformat(m.group(1) + frac + m.group(3))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return dt
+
+
+def render_summary(mm):
+    """요약 dict → 시작 컨텍스트 줄 목록. 본문이 비면 []."""
+    if not isinstance(mm, dict):
+        return []
+    content = mm.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return []
+    when = _parse_iso(mm.get("last_refreshed_at"))
+    if when is not None:
+        head = "## 프로젝트 요약 (자동 생성 · 갱신 %s)" % when.astimezone().strftime("%Y-%m-%d %H:%M")
+    else:
+        head = "## 프로젝트 요약 (자동 생성)"
+    cap = _env_num("HINDSIGHT_SUMMARY_CHARS", str(SUMMARY_CHARS), int)
+    # 본문의 마크다운 제목은 바깥 절(# 기억 저장소, ## 최근 기억)보다 한 단계 아래로 낮춘다.
+    body = re.sub(r"(?m)^#{1,3}(?=\s)", "####", content.strip())
+    if len(body) > cap:
+        body = body[:cap] + "\n…(요약이 길어 이하 생략)"
+    return [head, SUMMARY_NOTE, body]
+
+
+# ---------------------------------------------------------------------------
 # 부명령
 
 
@@ -551,7 +664,7 @@ def err(msg):
     sys.stderr.write(msg + "\n")
 
 
-def kst_now():
+def local_now():
     return datetime.datetime.now().astimezone().replace(microsecond=0)
 
 
@@ -639,7 +752,7 @@ def cmd_retain(args):
     if not content.strip():
         err("본문이 비어 있습니다.")
         return 1
-    now = kst_now()
+    now = local_now()
     doc_id = "%s-%s-%s" % (bank, now.strftime("%Y%m%d-%H%M%S"), sid[:8])
     saved_at = now.isoformat()
     body = {
@@ -673,6 +786,12 @@ def cmd_retain(args):
         err("기억 저장소에 닿지 못해 임시 보관했습니다: %s" % path)
         return 0
     print(doc_id)
+    # 직접 저장이 성공했을 때만 요약을 준비한다(대기열 재전송에서는 만들지 않는다).
+    if summary_target_name(bank):
+        try:
+            ensure_summary(bank)
+        except Exception as e:
+            err("경고: 프로젝트 요약을 만들지 못했습니다 (%s). 저장은 됐습니다." % describe_error(e))
     return 0
 
 
@@ -689,7 +808,57 @@ def cmd_forget(args):
         err("삭제하지 못했습니다: %s (%s)" % (args.doc_id, describe_error(e)))
         return 1
     print("삭제했습니다: %s (은행 %s)" % (args.doc_id, bank))
+    # 지운 내용이 요약에서도 사라지도록 비우고 처음부터 다시 갱신(clear → refresh).
+    try:
+        rebuild_summary(bank)
+    except Exception:
+        print(SUMMARY_STALE_NOTICE)
     return 0
+
+
+def list_server_banks():
+    resp = http("GET", api_path("banks"))
+    names = []
+    for b in _items(resp, ("banks", "items")):
+        name = _first(b, ("bank_id", "id"))
+        if name:
+            names.append(name)
+    return sorted(set(names))
+
+
+def bank_has_documents(bank):
+    resp = http("GET", api_path("documents", bank), query={"limit": 1, "offset": 0})
+    total = resp.get("total") if isinstance(resp, dict) else None
+    if isinstance(total, int) and not isinstance(total, bool):
+        return total > 0
+    return bool(_items(resp))
+
+
+def cmd_summary_sync(args):
+    if not token_ok(args.token, _session_id(args)):
+        err("이 명령은 주 세션만 쓸 수 있습니다 (저장 토큰이 맞지 않음).")
+        return 4
+    try:
+        banks = list_server_banks()
+    except Exception as e:
+        err("은행 목록을 받지 못했습니다 (%s)" % describe_error(e))
+        return 1
+    counts = {"created": 0, "exists": 0, "failed": 0}
+    label = {"created": "생성", "exists": "이미 있음"}
+    for bank in banks:
+        if not summary_target_name(bank):
+            continue
+        try:
+            if not bank_has_documents(bank):
+                continue
+            result = ensure_summary(bank)
+            print("%s: %s" % (bank, label[result]))
+            counts[result] += 1
+        except Exception as e:
+            print("%s: 실패 (%s)" % (bank, describe_error(e)))
+            counts["failed"] += 1
+    print("요약: 생성 %d, 이미 있음 %d, 실패 %d" % (counts["created"], counts["exists"], counts["failed"]))
+    return 1 if counts["failed"] else 0
 
 
 def cmd_flush_queue(args):
@@ -738,11 +907,26 @@ def build_context(data):
     except Exception:
         lines.append("대기열 확인 실패")
 
+    recent_share = _env_num("HINDSIGHT_RECENT_SECONDS", "4", float)
+
+    # 프로젝트 요약: 저장된 본문만 읽는다(언어모델 호출 없음). 최근 기억 몫은 남겨 두고,
+    # 없거나 비었거나 실패·시간 초과면 절 전체를 조용히 생략한다.
+    try:
+        remaining = budget - (time.monotonic() - hook_start)
+        sum_sec = min(_env_num("HINDSIGHT_SUMMARY_SECONDS", str(SUMMARY_SECONDS), float), remaining - recent_share)
+        if sum_sec >= SUMMARY_MIN_SECONDS:
+            block = render_summary(get_summary(bank, timeout=sum_sec))
+            if block:
+                lines.append("")
+                lines += block
+    except Exception:
+        pass
+
     lines.append("")
     lines.append("## 최근 기억")
     try:
         remaining = budget - (time.monotonic() - hook_start)
-        recent = fetch_recent(bank, 5, deadline=max(1.0, min(_env_num("HINDSIGHT_RECENT_SECONDS", "4", float), remaining)))
+        recent = fetch_recent(bank, RECENT_HOOK_LIMIT, deadline=max(1.0, min(recent_share, remaining)))
         if len(recent) > RECENT_CAP:
             recent = recent[:RECENT_CAP] + "\n…(이하 생략)"
         lines.append(recent)
@@ -813,6 +997,11 @@ def build_parser():
 
     s = sub.add_parser("flush-queue", help="대기열 재전송")
     s.set_defaults(func=cmd_flush_queue)
+
+    s = sub.add_parser("summary-sync", help="문서가 있는 은행마다 프로젝트 요약을 없으면 만든다(주 세션 전용)")
+    s.add_argument("--token", required=True)
+    s.add_argument("--session")
+    s.set_defaults(func=cmd_summary_sync)
 
     s = sub.add_parser("session-start-context", help="세션 시작 훅 컨텍스트")
     s.set_defaults(func=cmd_session_start_context)

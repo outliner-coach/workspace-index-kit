@@ -38,7 +38,7 @@ git clone <this-repo> workspace-index-kit
 bash workspace-index-kit/examples/demo.sh        # KEEP=1 을 붙이면 임시 폴더를 남긴다
 ```
 
-예시 카드 6장으로 지도를 만들고, 새 폴더가 생겼을 때·지도를 손으로 고쳤을 때 check가 어떻게 잡는지, 집 맥에서 폴더 이름이 달라도 같은 카드가 쓰이는 모습을 보여 줍니다.
+예시 카드 6장으로 지도를 만들고, 키워드로 카드를 찾아 위임 지시문을 뽑는 모습(resolve·brief), 새 폴더가 생겼을 때·지도를 손으로 고쳤을 때 check가 어떻게 잡는지, 집 맥에서 폴더 이름이 달라도 같은 카드가 쓰이는 모습을 보여 줍니다.
 
 ## 구조
 
@@ -51,7 +51,7 @@ bash workspace-index-kit/examples/demo.sh        # KEEP=1 을 붙이면 임시 �
 │   ├── catalog/<name>.md      ← 카드 (프로젝트마다 한 장)
 │   ├── excluded.md            ← 카드 없는 폴더와 사유
 │   ├── machines/<맥>.md        ← 다른 컴퓨터의 위치표 (선택)
-│   ├── scripts/               ← catalog.py (build·check), session_start.py (시작 훅)
+│   ├── scripts/               ← catalog.py (build·check·resolve·brief), session_start.py (시작 훅)
 │   └── memory/                ← 기억 저장소 연결 (선택)
 ├── budget-book/               ← 프로젝트 폴더들 (건드리지 않음)
 ├── cafe-booking/
@@ -114,7 +114,12 @@ bash workspace-index-kit/examples/demo.sh        # KEEP=1 을 붙이면 임시 �
 > 가계부 지출 차트가 이상해, 고쳐줘
 ```
 
-오케스트레이터는 지도에서 `budget-book`을 찾고, 카드를 열어 상태·민감도·확인일을 보고, 절대 경로와 먼저 읽을 문서, 할 일과 하지 말 것을 담아 보조 에이전트에게 넘깁니다. 후보가 없거나 여럿이면 묻습니다.
+오케스트레이터는 `catalog.py resolve 가계부 지출`로 후보 카드 `budget-book`을 찾고, 카드를 열어 상태·민감도·확인일을 본 뒤, `catalog.py brief budget-book`이 찍은 위임 지시문(절대 경로, 먼저 읽을 문서, 민감도 제한, 주의 절)에 할 일과 하지 말 것을 채워 보조 에이전트에게 넘깁니다. 후보가 없거나 여럿이면 묻습니다. 대체된 옛 이름으로 찾으면 후속 카드로 안내합니다.
+
+```bash
+python3 workspace-index/scripts/catalog.py resolve 가계부 지출   # 마지막 줄: 후보 1개: budget-book
+python3 workspace-index/scripts/catalog.py brief budget-book     # 위임 지시문(읽기 전용)
+```
 
 카드는 오케스트레이터가 스스로 갱신합니다(확인일, 요약, 별칭 등). 상태·민감도처럼 판단이 들어간 값을 바꾸면 한 줄로 알려 줍니다. 고친 뒤에는 build → check → 커밋(→ push)까지 합니다.
 
@@ -124,6 +129,7 @@ bash workspace-index-kit/examples/demo.sh        # KEEP=1 을 붙이면 임시 �
 
 ## 안전 장치
 
+- check는 카드 내용 규칙(요약 끝 마침표, 미래 날짜, 대체된 카드의 후속 카드, 자격증명 카드의 빈 주의 절)도 ERROR로 잡습니다.
 - 스크립트는 작업공간의 **폴더 이름·수정 시각·git 날짜만** 봅니다. 프로젝트 파일 내용은 읽지 않고, `secret`이라는 이름의 경로는 어느 깊이에서도 열거하지 않습니다.
 - 카드에는 민감 파일의 **이름만** 적고 값은 적지 않습니다.
 - 외부 패키지가 없습니다. Python 3.9 표준 라이브러리와 bash만 씁니다.

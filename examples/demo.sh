@@ -1,6 +1,6 @@
 #!/bin/bash
 # 1분 체험: 임시 폴더에 가짜 작업공간 두 개(회사 맥 main, 집 맥 home)를 만들고
-# 예시 카드 6장으로 build → check 를 돌려 본다. 실제 작업공간과 홈은 건드리지 않는다.
+# 예시 카드 6장으로 build → check, resolve → brief 를 돌려 본다. 실제 작업공간과 홈은 건드리지 않는다.
 #
 #   bash examples/demo.sh          # 끝나면 임시 폴더를 지운다
 #   KEEP=1 bash examples/demo.sh   # 임시 폴더를 남겨 PROJECTS.md 등을 직접 열어 본다
@@ -46,6 +46,11 @@ run "$MAIN" main check || true
 
 say "만들어진 지도 PROJECTS.md (앞부분)"
 sed -n '1,20p' "$MAIN/workspace-index/PROJECTS.md"
+
+say "키워드로 카드를 찾고(resolve) 위임 지시문을 뽑는다(brief)"
+run "$MAIN" main resolve 가계부 대시보드
+echo "→ '대시보드'는 카드 둘에 걸린다. 후보가 여럿이면 오케스트레이터는 고르게 한다."
+run "$MAIN" main brief budget-book
 
 say "카드 없는 새 폴더가 생기면 check 가 바로 잡아낸다"
 mkdir "$MAIN/new-idea"

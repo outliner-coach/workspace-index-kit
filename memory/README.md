@@ -8,8 +8,8 @@
 
 ```
 맥 Claude Code 세션
-  ├─ 세션 시작 훅  ~/.claude/hooks/hindsight-session-start.sh  → 은행 해석 → 최근 기억 5건 + 안내문 주입
-  ├─ 명령          ~/.claude/scripts/hindsight-mem (recall / retain / forget / recent / flush-queue)
+  ├─ 세션 시작 훅  ~/.claude/hooks/hindsight-session-start.sh  → 은행 해석 → 프로젝트 요약 + 최근 기억 3건 + 안내문 주입
+  ├─ 명령          ~/.claude/scripts/hindsight-mem (recall / retain / forget / recent / flush-queue / summary-sync)
   └─ 스킬          ~/.claude/skills/memory-save ("세션 종료"·"기억해"·"잊어줘"·"정정해")
         │ HTTPS + Bearer 공유키
         ▼
@@ -69,13 +69,16 @@ HINDSIGHT_SSH_KEY=~/.ssh/my-server-key
 
 ## 세션에서 쓰는 법
 
-- **세션 시작**: 훅이 "# 기억 저장소 (Hindsight)" 절을 넣는다(은행, 대기열 상태, 저장 토큰, 최근 기억 5건, 사용법). 서버에 닿지 못하면 "닿지 못했습니다" 한 줄만 나오고 작업은 계속된다. 언어모델 호출이 없어 빠르다(훅 전체 상한 11초).
+- **세션 시작**: 훅이 "# 기억 저장소 (Hindsight)" 절을 넣는다. 순서는 머리 줄(은행, 저장 토큰, 대기열 상태) → `## 프로젝트 요약 (자동 생성 · 갱신 YYYY-MM-DD HH:MM)`(이 맥의 현지 시각) + "언어모델이 기억에서 만든 요약이다. 최근 기억이나 프로젝트 파일과 어긋나면 그쪽을 따른다." 줄 + 요약 본문(4,000자 상한) → `## 최근 기억` 3건 → `## 사용법`. 요약이 없거나 비었거나 조회가 실패·시간 초과면 요약 절만 빠진다. 서버에 닿지 못하면 최근 기억 자리에 "닿지 못했습니다" 한 줄만 나오고 작업은 계속된다. 훅은 저장된 요약을 읽기만 하고 언어모델을 부르지 않는다. 훅 전체 상한 11초(토큰 발급 → 대기열 재전송 최대 6초 → 요약 조회 최대 3초, 최근 기억 몫 4초를 남기고 1초 미만이면 건너뜀 → 최근 기억 조회).
+- **프로젝트 요약**: 은행마다 Hindsight mental model 하나(id `project-summary`, 이름 "프로젝트 요약"). 질문은 현재 상태·다음 할 일·함정이고 답은 한국어 마크다운(최대 800토큰). `trigger`는 `refresh_after_consolidation: true`, `mode: full`이라 서버가 새 기억을 통합한 뒤 처음부터 다시 쓴다. 대상 은행은 카드 name(removed 포함)과 `workspace-index`이며 `restore-test`는 제외한다. 질문·토큰 상한 같은 값은 `hindsight_mem.py` 머리의 `SUMMARY_*` 상수다.
 - **"세션 종료"**: 진행 문서(PROGRESS·PLAN)를 정리한 뒤 `/memory-save`가 인계문(결정과 이유 / 함정과 배운 것 / 남은 일과 다음 첫 행동)을 저장한다. **파일이 정본이고 기억 저장소는 빨리 떠올리는 층이다.**
 - **"기억해"** → `/memory-save note`. 설계를 바꾸는 결정·되돌리기 어려운 선택·재현하기 어려운 함정이 나오면 에이전트가 스스로 저장한다.
 - **"잊어줘 <대상>"** → `/memory-save forget`(후보를 보여 주고 확인 뒤 삭제). **"정정해 <대상> → <새 내용>"** → `/memory-save correct`.
 - 저장 금지: 실명, 주민번호, 급여, 연락처, 고객·후보자 정보, 토큰·키·비밀번호.
 - **주 세션만 저장한다.** 저장·삭제에는 훅이 준 저장 토큰이 필요하고, 보조 에이전트는 토큰을 받지 않는다.
 - 서버 불통·타임아웃·5xx로 저장이 실패하면 `~/.local/state/hindsight-queue/`에 쌓였다가 다음 세션 시작이나 다음 저장 때 자동 재전송된다.
+- 직접 `retain`이 성공하면 그 은행에 요약이 없을 때 만든다(실패해도 저장은 성공, 표준 오류에 "경고: 프로젝트 요약을 만들지 못했습니다" 한 줄). 대기열 재전송에서는 만들지 않는다.
+- `forget`이 성공하면 요약이 있을 때 비우고 처음부터 다시 갱신한다(clear → refresh). 지운 내용이 요약에 남지 않게 하려는 것이다. 이 단계가 실패하면 표준 출력에 "요약에 지운 내용이 남아 있을 수 있음(다음 갱신 때 사라짐)" 줄이 나오고 종료 코드는 0이다.
 
 ## 명령 (`~/.claude/scripts/hindsight-mem`)
 
@@ -84,12 +87,20 @@ HINDSIGHT_SSH_KEY=~/.ssh/my-server-key
 | `resolve-bank [cwd]` | 폴더 → 은행 이름 | 없으면 3 |
 | `recent [--bank B] [--limit N]` | 최신순 원문 목록 | 실패 0 + stderr |
 | `recall "<질의>" [--bank B]` | 의미 검색 | 실패 0 + stderr |
-| `retain [파일] --kind handoff\|note\|correction\|retraction --token T [--bank B]` | 저장. 식별자 `<은행>-<시각>-<세션 앞 8자>` 출력 | 토큰 불일치 4, 은행 거부 2, 실패 시 대기열 적재 0 |
-| `forget <식별자> --token T [--bank B]` | 문서 삭제 | 실패 1 |
+| `retain [파일] --kind handoff\|note\|correction\|retraction --token T [--bank B]` | 저장. 식별자 `<은행>-<시각>-<세션 앞 8자>` 출력. 직접 저장 성공 뒤 요약이 없으면 생성 | 토큰 불일치 4, 은행 거부 2, 실패 시 대기열 적재 0 |
+| `forget <식별자> --token T [--bank B]` | 문서 삭제 뒤 요약 clear → refresh | 토큰 불일치 4, 삭제 실패 1, 요약 재생성 실패는 안내 줄 + 0 |
+| `summary-sync --token T [--session S]` | 서버 은행 중 문서가 1건 이상인 요약 대상 은행마다 요약이 없으면 만든다. 은행별 `<은행>: 생성\|이미 있음\|실패 (…)`와 마지막 줄 `요약: 생성 N, 이미 있음 N, 실패 N` | 토큰 불일치 4, 은행 목록 실패·은행 하나라도 실패 1 |
 | `flush-queue` | 대기열 재전송 | 0 |
 | `session-start-context` | 훅용(stdin JSON) | 항상 0 |
 
-조정값(환경변수): `HINDSIGHT_TIMEOUT`(조회 5초), `HINDSIGHT_RETAIN_TIMEOUT`(저장 30초), `HINDSIGHT_RECENT_SECONDS`(4초), `HINDSIGHT_HOOK_SECONDS`(11초), `HINDSIGHT_FLUSH_MAX`/`HINDSIGHT_FLUSH_SECONDS`(3건/6초), `HINDSIGHT_BACKUP_KEEP_DAYS`/`HINDSIGHT_BACKUP_KEEP_MIN`(서버 14일/최근 7개), `HINDSIGHT_PULL_KEEP_DAYS`/`HINDSIGHT_PULL_KEEP_MIN`(맥 60일/최근 7개).
+조정값(환경변수): `HINDSIGHT_TIMEOUT`(조회 5초), `HINDSIGHT_RETAIN_TIMEOUT`(저장 30초), `HINDSIGHT_RECENT_SECONDS`(훅의 최근 기억 조회 4초), `HINDSIGHT_SUMMARY_SECONDS`(훅의 요약 조회 3초), `HINDSIGHT_SUMMARY_CHARS`(요약 본문 상한 4,000자), `HINDSIGHT_HOOK_SECONDS`(11초), `HINDSIGHT_FLUSH_MAX`/`HINDSIGHT_FLUSH_SECONDS`(3건/6초), `HINDSIGHT_BACKUP_KEEP_DAYS`/`HINDSIGHT_BACKUP_KEEP_MIN`(서버 14일/최근 7개), `HINDSIGHT_PULL_KEEP_DAYS`/`HINDSIGHT_PULL_KEEP_MIN`(맥 60일/최근 7개).
+
+## 프로젝트 요약 비용·운영
+
+- 요약 갱신(자동 갱신·`forget` 뒤 재생성·처음 생성) 한 번마다 서버 언어모델(`HINDSIGHT_API_LLM_PROVIDER` 설정의 모델)을 한 번 부른다. 저장이 잦은 은행일수록 늘어난다. 시작 훅은 비용을 만들지 않는다(저장된 본문 조회만).
+- mental model API가 있는 Hindsight 버전(예시 compose의 `1.0.0-slim`)이 필요하다. 서버 쪽 추가 설정은 없다.
+- 이미 기억이 있는 은행에 한꺼번에 만들려면 주 세션에서 `~/.claude/scripts/hindsight-mem summary-sync --token <저장 토큰>`. 멱등이다(이미 있으면 "이미 있음"). 만든 직후 본문은 비어 있고 서버가 수 초~수십 초 뒤 채운다.
+- 시작 컨텍스트에서 요약 본문의 `#`~`###` 제목은 `####`로 낮춰 보인다(바깥 절과 섞이지 않게).
 
 ## 보안
 

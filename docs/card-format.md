@@ -24,12 +24,12 @@
 | `path` | 기록 | 기본 맥에서 작업공간 루트 기준 경로. 깊이 1, 또는 `bundle_dirs` 아래 깊이 2. 기본 맥에 없으면 `-` |
 | `group` | 판단 | `config.json`의 `groups` 중 하나. 지도가 이 순서로 표를 나눈다 |
 | `status` | 판단 | 아래 7값 |
-| `summary` | 기록 | 한 줄 요약. 지도에 그대로 실려 라우팅 단서가 된다 |
+| `summary` | 기록 | 한 줄 요약. 지도에 그대로 실려 라우팅 단서가 된다. 끝에 마침표 `.`를 찍지 않는다 |
 | `stack` | 기록 | 기술 스택 |
 | `entry_docs` | 기록 | 들어갈 때 읽을 파일, **읽는 순서대로** |
 | `covers` | 판단 | 이 카드가 대신 설명하는 폴더(옛 클론·worktree·사본). 기본 맥 기준 |
-| `related` | 기록 | 관련 카드 name |
-| `aliases` | 기록 | 한글명·영문명·약칭·하위 프로젝트명. 요청 키워드를 여기에 맞춘다 |
+| `related` | 기록 | 관련 카드 name. superseded 카드에서는 **첫 항목이 후속 카드**다(바꾸면 판단 필드처럼 알린다) |
+| `aliases` | 기록 | 한글명·영문명·약칭·하위 프로젝트명. `resolve`가 요청 키워드를 여기(와 name·폴더 이름)에 맞춘다 |
 | `sensitive` | 판단 | `none` · `credentials` · `pii` |
 | `read_scope` | 판단 | pii일 때 읽어도 되는 하위폴더(필수) |
 | `last_activity` | 자동 | build가 git 마지막 커밋 날짜(없으면 파일 수정 시각)로 쓴다. 손으로 적지 않는다 |
@@ -44,10 +44,17 @@
 | active | 진행 중 |
 | paused | 멈춤, 재개 가능 |
 | done | 완료·유지보수만 |
-| superseded | 다른 폴더가 대체. 본문에 후속 카드를 적는다 |
+| superseded | 다른 폴더가 대체. `related` 첫 항목에 후속 카드(살아 있는 카드)를 적는다 |
 | template | 템플릿·참고용 |
 | scratch | 실험·잡동사니 |
 | removed | 모든 컴퓨터에서 폴더가 사라짐. 카드는 지우지 않고 남긴다 |
+
+## 내용 규칙 (어기면 check가 ERROR, build는 막지 않음)
+
+- `summary`가 마침표 `.`로 끝나지 않는다(중간의 `v1.2` 같은 마침표는 괜찮다).
+- `last_verified`·`last_activity`가 오늘보다 뒤가 아니다.
+- `status: superseded`면 `related` 첫 항목이 superseded·removed가 아닌 카드다.
+- `sensitive: credentials`면 `## 주의` 절이 비어 있지 않다(민감 파일명을 적는다).
 
 ## sensitive 3값
 
@@ -64,6 +71,13 @@
 3. **카드 없는 폴더**: `excluded.md`(다른 맥 위치표의 "카드 없는 폴더")에 사유와 함께
 
 어디에도 없으면 "미등록 폴더" ERROR, 둘 이상이면 ERROR.
+
+## 카드 찾기와 위임 (`resolve`·`brief`)
+
+둘 다 읽기 전용이고 폴더 위치는 지금 컴퓨터 기준이다(기본 맥은 카드 `path`·`covers`, 다른 맥은 위치표).
+
+- `catalog.py resolve <키워드…>`: 키워드를 카드 `name`·`aliases`·실제 폴더 이름·사본 폴더 이름에 맞춘다. NFC·대소문자·공백·하이픈·밑줄은 무시한다. 키워드마다 완전 일치가 있으면 그것만 후보이고 부분 일치(2자 이상)는 참고로 보인다. 키워드가 여럿이면 후보는 합집합이고, 마지막 줄은 `후보 N개: …`. superseded 카드의 이름으로 찾으면 후속 카드가 후보가 되고, removed 카드는 참고로만, 카드 없는 폴더는 완전 일치일 때 사유와 함께 보인다. `summary`는 검색하지 않는다. 종료 코드는 항상 0.
+- `catalog.py brief <name> [--read-only]`: 카드 한 장에서 보조 에이전트용 위임 지시문을 찍는다. 절대 경로, 먼저 읽을 `CLAUDE.md`/`AGENTS.md`(있는 것만)와 `entry_docs`(없는 파일은 표시), sensitive별 제한(pii면 `read_scope`), `## 주의` 절 전문, 공통 금지, 마지막 줄 작업 범위 자리표시자. 작업공간 쪽은 이름·존재 여부만 보고 파일 내용은 읽지 않는다. 없는 이름·구조 오류·removed·이 맥에 폴더 없음·path 폴더 없음은 종료 1, superseded는 `--read-only` 없이는 후속 카드를 안내하고 종료 1.
 
 ## config.json
 

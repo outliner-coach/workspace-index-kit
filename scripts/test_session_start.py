@@ -48,6 +48,12 @@ class SessionStartTest(unittest.TestCase):
         self.assertNotIn("WARN a:", p.stdout)
         self.assertIn("별칭 겹침 WARN 1줄은 생략", p.stdout)
 
+    def test_brief_points_to_resolve_and_brief(self):
+        p = self.run_hook(json.dumps({"cwd": self.ws}))
+        self.assertIn("catalog.py resolve <키워드…>", p.stdout)
+        self.assertIn("catalog.py brief <name>", p.stdout)
+        self.assertIn("--read-only", p.stdout)
+
     def test_root_with_trailing_slash(self):
         p = self.run_hook(json.dumps({"cwd": self.ws + "/"}))
         self.assertIn("오케스트레이터 모드", p.stdout)

@@ -3,6 +3,8 @@
 
     python3 scripts/catalog.py check [--no-coverage]   # 읽기 전용 검증
     python3 scripts/catalog.py build                    # last_activity 갱신 + PROJECTS.md 생성
+    python3 scripts/catalog.py resolve <키워드> [...]    # 키워드로 후보 카드 판정(읽기 전용)
+    python3 scripts/catalog.py brief <name> [--read-only] # 카드에서 위임 지시문 출력(읽기 전용)
 
 - Python 3.9, 표준 라이브러리만 사용한다. 그룹·묶음 폴더·기본 맥 이름은 저장소 루트의 config.json 으로 정한다.
 - 저장소 루트는 이 파일의 위치(scripts/..)로 찾고, 작업공간 루트는 그 부모다. cwd 에 의존하지 않는다.
@@ -714,6 +716,59 @@ def compute_activities(cards, layout, workspace_root, fs):
     return result
 
 
+def _section_text(body, heading):
+    """본문에서 `heading` 절의 내용(다음 `## ` 제목 전까지). 절이 없으면 None."""
+    lines = body.split("\n")
+    for i, line in enumerate(lines):
+        if line.rstrip() == heading:
+            content = []
+            for nxt in lines[i + 1:]:
+                if nxt.startswith("## "):
+                    break
+                content.append(nxt)
+            return "\n".join(content)
+    return None
+
+
+def check_card_rules(card, by_name, today):
+    """check 에서만 보는 카드 규칙(build 를 막지 않는다). 오류 메시지 목록을 돌려준다.
+
+    - summary 가 `.` 로 끝나면 안 된다.
+    - last_verified·last_activity 가 오늘보다 뒤면 안 된다.
+    - status: superseded 이면 related 첫 항목이 superseded·removed 가 아닌 카드여야 한다.
+    - sensitive: credentials 이면 `## 주의` 절에 내용이 있어야 한다.
+    """
+    errs = []
+    f = card.fields
+    summary = card.get_str("summary")
+    if summary.endswith("."):
+        errs.append("summary 가 마침표 `.` 로 끝남")
+    today_s = today.isoformat()
+    for key in ("last_verified", "last_activity"):
+        val = card.get_str(key)
+        if val and _valid_date(val) and val > today_s:
+            errs.append("%s %s 가 오늘(%s)보다 뒤(미래 날짜)" % (key, val, today_s))
+    if f.get("status") == "superseded":
+        related = card.get_list("related")
+        if not related:
+            errs.append("status superseded 인데 related 가 비어 있음(첫 항목에 후속 카드를 적는다)")
+        else:
+            first = related[0]
+            targets = by_name.get(first)
+            if not targets:
+                errs.append("status superseded 인데 related 첫 항목 `%s` 에 해당하는 카드가 없음" % first)
+            else:
+                st = targets[0].get_str("status")
+                if st in ("superseded", "removed"):
+                    errs.append("status superseded 인데 related 첫 항목 `%s` 의 status 가 %s 임"
+                                "(살아 있는 후속 카드여야 함)" % (first, st))
+    if f.get("sensitive") == "credentials":
+        section = _section_text(card.body, "## 주의") if card.fm_end_line is not None else None
+        if section is None or section.strip() == "":
+            errs.append("sensitive: credentials 인데 `## 주의` 절이 비어 있음(자격증명 파일명을 적는다)")
+    return errs
+
+
 def run_check(repo_root, workspace_root, coverage=True, today=None, out=sys.stdout):
     """check 본체. 종료코드(0/1)를 돌려준다."""
     today = today or datetime.date.today()
@@ -766,6 +821,11 @@ def run_check(repo_root, workspace_root, coverage=True, today=None, out=sys.stdo
             for n in names:
                 others = [m for m in names if m != n]
                 rep.warn(n, "alias `%s` 가 다른 카드와 겹침: %s" % (alias, ", ".join(others)))
+
+    # 2-1) check 전용 카드 규칙(build 를 막지 않음)
+    for card in cards:
+        for msg in check_card_rules(card, by_name, today):
+            rep.error(card.name, msg)
 
     # 3) 파일시스템 검사(이 맥 기준): path·entry_docs·covers·read_scope 존재
     #    다른 맥의 사본은 낡았을 수 있어 entry_docs·read_scope 부재는 경고로만 본다.
@@ -1013,6 +1073,340 @@ def run_build(repo_root, workspace_root, today=None, out=sys.stdout):
 
 
 # ---------------------------------------------------------------------------
+# 공용 도우미: 구조가 온전한 카드만 모으기, name 으로 카드 찾기
+# ---------------------------------------------------------------------------
+
+def load_valid_cards(repo_root, err=None):
+    """구조 오류가 없는 카드만 돌려준다. 건너뛴 카드는 err 에 한 줄씩 적는다."""
+    err = err if err is not None else sys.stderr
+    cards, load_errors = load_cards(repo_root)
+    for _, who, msg in load_errors:
+        err.write("건너뜀 %s: %s\n" % (who, msg))
+    valid = []
+    for card in cards:
+        errs = validate_card_shape(card)
+        if errs:
+            err.write("건너뜀 %s: 카드 구조 오류 %d건(check 로 확인): %s\n"
+                      % (card.name, len(errs), errs[0]))
+            continue
+        valid.append(card)
+    return valid
+
+
+def cards_by_name(cards):
+    """{name: Card}. 같은 name 이 여럿이면 파일명 순으로 앞의 것."""
+    table = {}
+    for card in cards:
+        table.setdefault(card.field_name, card)
+    return table
+
+
+def successor_of(card, by_name):
+    """superseded 카드의 후속 카드(related 첫 항목). 살아 있는 카드가 아니면 None."""
+    related = card.get_list("related")
+    if not related:
+        return None
+    succ = by_name.get(related[0])
+    if succ is None or succ.get_str("status") in ("superseded", "removed"):
+        return None
+    return succ
+
+
+# ---------------------------------------------------------------------------
+# resolve (ORCHESTRATOR.md 3절): 키워드 → 후보 카드
+# ---------------------------------------------------------------------------
+
+RESOLVE_MIN_PARTIAL = 2         # 부분 일치는 정규화 뒤 양쪽 모두 이 길이 이상일 때만
+_RESOLVE_STRIP_RE = re.compile(r"[\s\-_]+")
+EXACT, PARTIAL = 2, 1
+
+
+def resolve_norm(s):
+    """NFC → casefold → 공백·하이픈·밑줄 제거."""
+    return _RESOLVE_STRIP_RE.sub("", nfc(s).casefold())
+
+
+def _last_part(rel):
+    return rel.rstrip("/").split("/")[-1]
+
+
+def card_labels(card, layout=None):
+    """카드의 이름표 [(종류, 원문)]. 종류: 이름 / 별칭 / 폴더 / 사본 폴더.
+
+    폴더·사본 폴더는 카드 path·covers(기본 맥)와 layout(지금 맥)의 위치를 함께 본다. 같은 이름은 한 번만.
+    """
+    labels = [("이름", card.field_name)]
+    labels += [("별칭", a) for a in card.get_list("aliases")]
+    folders = []
+    path = card.get_str("path")
+    if path and path != NOT_HERE:
+        folders.append(path)
+    copies = list(card.get_list("covers"))
+    if layout is not None:
+        here = layout.paths.get(card.name)
+        if here:
+            folders.append(here)
+        copies += [folder for folder, name in layout.covers if name == card.name]
+    for kind, items in (("폴더", folders), ("사본 폴더", copies)):
+        for item in items:
+            label = (kind, _last_part(item))
+            if label not in labels:
+                labels.append(label)
+    return labels
+
+
+def _match_card(nk, card, layout=None):
+    """키워드(정규화) 와 카드의 가장 강한 일치. (세기, [(종류, 원문)]) 또는 (0, [])."""
+    best, hits = 0, []
+    for kind, raw in card_labels(card, layout):
+        nl = resolve_norm(raw)
+        if not nl:
+            continue
+        if nl == nk:
+            strength = EXACT
+        elif (len(nk) >= RESOLVE_MIN_PARTIAL and len(nl) >= RESOLVE_MIN_PARTIAL
+              and (nk in nl or nl in nk)):
+            strength = PARTIAL
+        else:
+            continue
+        if strength > best:
+            best, hits = strength, [(kind, raw)]
+        elif strength == best and (kind, raw) not in hits:
+            hits.append((kind, raw))
+    return best, hits
+
+
+def _evidence(strength, hits):
+    word = "완전 일치" if strength == EXACT else "부분 일치"
+    parts = ["%s `%s` %s" % (kind, raw, word) for kind, raw in hits]
+    for kind, raw in hits:
+        if kind == "사본 폴더":
+            parts.append("사본 폴더 `%s`의 정본" % raw)
+    return ", ".join(parts)
+
+
+def _card_head(card, layout=None):
+    """후보·참고 줄 머리. path 는 지금 맥 기준이고, 이 맥에 폴더가 없으면 그렇게 적는다."""
+    path = card.get_str("path")
+    if layout is not None:
+        here = layout.paths.get(card.name)
+        if here is not None:
+            path = here
+        elif not card.removed:
+            path = "%s(이 맥 %s 에 없음)" % (NOT_HERE, layout.name)
+    return "%s — path %s · status %s" % (card.field_name, path, card.get_str("status"))
+
+
+def resolve_keyword(keyword, cards, by_name, excluded, layout=None):
+    """키워드 하나를 판정한다. (후보 [(Card, [표시])], 참고 [(머리, Card, [표시])], 제외 폴더 줄).
+
+    layout 이 있으면 폴더 이름표와 카드 없는 폴더는 그 맥 기준이다(excluded 대신 layout.excluded).
+    """
+    nk = resolve_norm(keyword)
+    excluded_lines = []
+    if not nk:
+        return [], [], excluded_lines
+    if layout is not None:
+        excluded = layout.excluded
+    for folder, reason in excluded:
+        if resolve_norm(folder) == nk or resolve_norm(_last_part(folder)) == nk:
+            excluded_lines.append("카드 없는 폴더 %s(사유: %s)" % (folder, reason))
+
+    matched = []
+    for card in cards:
+        strength, hits = _match_card(nk, card, layout)
+        if strength:
+            matched.append((card, strength, hits))
+    top = EXACT if any(m[1] == EXACT for m in matched) else PARTIAL
+
+    cand_order, cand_notes = [], {}
+    refs = []
+
+    def add_candidate(card, note):
+        name = card.field_name
+        if name not in cand_notes:
+            cand_order.append(card)
+            cand_notes[name] = []
+        if note not in cand_notes[name]:
+            cand_notes[name].append(note)
+
+    for card, strength, hits in matched:
+        ev = _evidence(strength, hits)
+        if strength != top:
+            refs.append(("참고", card, [ev]))
+            continue
+        status = card.get_str("status")
+        if status == "removed":
+            refs.append(("참고(폴더 없음)", card, [ev]))
+        elif status == "superseded":
+            succ = successor_of(card, by_name)
+            if succ is None:
+                refs.append(("참고", card, [ev, "대체됨, 후속 카드를 찾을 수 없음"]))
+                continue
+            refs.append(("참고", card, [ev, "대체됨(읽기 전용) → %s" % succ.field_name]))
+            add_candidate(succ, "옛 이름 %s로 찾음 — %s는 대체됨(읽기 전용)"
+                          % (keyword, card.field_name))
+        else:
+            add_candidate(card, ev)
+
+    # 후보 줄의 표시 순서: 자기 일치 근거가 먼저, 옛 이름 표시는 뒤
+    candidates = []
+    for card in cand_order:
+        notes = cand_notes[card.field_name]
+        notes = [n for n in notes if not n.startswith("옛 이름 ")] + \
+                [n for n in notes if n.startswith("옛 이름 ")]
+        candidates.append((card, notes))
+    cand_names = set(cand_notes)
+    refs = [r for r in refs if r[1].field_name not in cand_names]
+    return candidates, refs, excluded_lines
+
+
+def run_resolve(repo_root, workspace_root, keywords, out=sys.stdout, err=sys.stderr):
+    """resolve 본체. 카드·excluded.md·위치표만 읽고 아무것도 쓰지 않는다. 종료코드 0.
+
+    workspace_root 는 지금 맥 이름을 정하는 데만 쓴다(경로 문자열만 보고 작업공간은 읽지 않음).
+    """
+    cards = load_valid_cards(repo_root, err)
+    by_name = cards_by_name(cards)
+    excluded, exc_errors = load_excluded(repo_root)
+    for msg in exc_errors:
+        err.write("excluded.md: %s\n" % msg)
+    layout = current_layout(cards, excluded, load_machines(repo_root), workspace_root)
+
+    total, seen = [], set()
+    for keyword in keywords:
+        candidates, refs, excluded_lines = resolve_keyword(keyword, cards, by_name, excluded, layout)
+        out.write("키워드 `%s`\n" % keyword)
+        for card, notes in candidates:
+            out.write("  후보 %s · %s\n" % (_card_head(card, layout), " · ".join(notes)))
+            if card.field_name not in seen:
+                seen.add(card.field_name)
+                total.append(card.field_name)
+        for head, card, notes in refs:
+            out.write("  %s %s · %s\n" % (head, _card_head(card, layout), " · ".join(notes)))
+        for line in excluded_lines:
+            out.write("  %s\n" % line)
+        if not candidates:
+            out.write("  일치 없음\n")
+    if total:
+        out.write("후보 %d개: %s\n" % (len(total), ", ".join(total)))
+    else:
+        out.write("후보 0개\n")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# brief (ORCHESTRATOR.md 3절 6단계): 카드 → 보조 에이전트에게 넘길 위임 지시문
+# ---------------------------------------------------------------------------
+
+BRIEF_MISSING = "(없음 — 카드 확인 필요)"
+BRIEF_SECRET_RULE = ("작업공간 비밀 자료(`.env*`, 개인 키, 인증서, 토큰, 자격증명, 키체인 내보내기)를 "
+                     "읽거나 인용·복사·수정하지 말 것.")
+BRIEF_MEMORY_RULE = "보조 에이전트는 기억 저장소에 저장하지 않는다."
+BRIEF_READ_ONLY = "이 폴더는 읽기 전용이다. 파일을 만들거나 고치거나 지우지 않는다."
+BRIEF_SCOPE = "작업 범위: (오케스트레이터가 채움 — 할 것 / 하지 않을 것)"
+BRIEF_RULE_FILES = ["CLAUDE.md", "AGENTS.md"]
+
+
+def _has_secret(rel):
+    return any(nfc(p) == SECRET for p in rel.split("/"))
+
+
+def _brief_sub(fs, folder_real, rel):
+    """폴더 아래 rel 의 절대 경로 줄. 실제로 있으면 디스크 이름, 없으면 표시를 붙인다."""
+    if _has_secret(rel):
+        return "(비밀 경로라 생략 — 카드 확인 필요)"
+    real = fs.resolve(folder_real, rel)
+    if real is not None and os.path.lexists(real):
+        return real
+    return "%s %s" % (os.path.join(folder_real, rel), BRIEF_MISSING)
+
+
+def run_brief(repo_root, workspace_root, name, read_only=False, out=sys.stdout, err=sys.stderr):
+    """brief 본체. 카드와 위치표만 읽고, 작업공간 쪽은 이름·존재 여부만 본다. 아무것도 쓰지 않는다.
+
+    폴더 경로는 지금 맥 기준이다(기본 맥은 카드 path, 다른 맥은 machines/<맥>.md 위치표).
+    종료코드: 정상 0, 카드 없음·removed·superseded(--read-only 없음)·이 맥에 폴더 없음·path 없음 1.
+    """
+    name = nfc(name)
+    skipped = _Collector()
+    cards = load_valid_cards(repo_root, skipped)
+    card = cards_by_name(cards).get(name)
+    if card is None:
+        if ("건너뜀 %s:" % name) in skipped.text:
+            err.write("brief: 카드 `%s` 에 구조 오류가 있어 쓸 수 없음(check 로 확인)\n" % name)
+        else:
+            err.write("brief: `%s` 이름의 카드가 없음\n" % name)
+        return 1
+    status = card.get_str("status")
+    if status == "removed":
+        err.write("brief: `%s` 는 폴더가 없는 카드(status removed)\n" % name)
+        return 1
+    if status == "superseded" and not read_only:
+        related = card.get_list("related")
+        succ = related[0] if related else "(없음)"
+        err.write("brief: 대체된 폴더: 후속 카드 `%s`의 brief를 쓸 것. "
+                  "옛 폴더를 읽기만 하려면 --read-only\n" % succ)
+        return 1
+
+    fs = FS()
+    layout = current_layout(cards, [], load_machines(repo_root), workspace_root)   # 카드 없는 폴더는 안 씀
+    rel = layout.paths.get(card.name)
+    if rel is None:
+        err.write("brief: `%s` 는 이 맥(%s)에 폴더가 없음(PROJECTS.md '맥' 열 참고)\n"
+                  % (name, layout.name))
+        return 1
+    folder_real = None if _has_secret(rel) else fs.resolve(workspace_root, rel)
+    if folder_real is None or not os.path.isdir(folder_real):
+        shown = "(비밀 경로)" if _has_secret(rel) else os.path.join(workspace_root, rel)
+        err.write("brief: `%s` 의 path 폴더가 디스크에 없음: %s\n" % (name, shown))
+        return 1
+
+    lines = ["대상: 카드 `%s` (status %s)" % (card.field_name, status),
+             "폴더(절대 경로): %s" % folder_real,
+             "",
+             "먼저 읽을 것(프로젝트 규칙):"]
+    rule_files = [fs.resolve(folder_real, fn) for fn in BRIEF_RULE_FILES]
+    rule_files = [p for p in rule_files if p is not None and os.path.isfile(p)]
+    if rule_files:
+        lines += ["- %s" % p for p in rule_files]
+    else:
+        lines.append("- 폴더 최상위에 CLAUDE.md·AGENTS.md 가 없다.")
+    lines.append("이어서 읽을 것(카드 entry_docs, 적힌 순서대로):")
+    for i, doc in enumerate(card.get_list("entry_docs"), 1):
+        lines.append("%d. %s" % (i, _brief_sub(fs, folder_real, doc)))
+
+    sensitive = card.get_str("sensitive")
+    if sensitive == "pii":
+        lines += ["", "민감도 pii: 아래 하위폴더만 읽는다. 그 밖은 열거·열람하지 않는다."]
+        lines += ["- %s" % _brief_sub(fs, folder_real, sub) for sub in card.get_list("read_scope")]
+        lines.append("개인정보 파일을 열거나 인용하지 말 것.")
+    elif sensitive == "credentials":
+        lines += ["", "민감도 credentials: 카드 '주의' 절에 적힌 자격증명 파일은 열지 말 것."]
+
+    caution = _section_text(card.body, "## 주의") or ""
+    caution = caution.strip("\n")
+    lines += ["", "주의(카드 '주의' 절 전문):", caution if caution.strip() else "(비어 있음)"]
+
+    lines += ["", "공통 금지:", "- " + BRIEF_SECRET_RULE, "- " + BRIEF_MEMORY_RULE]
+    if read_only:
+        lines += ["", BRIEF_READ_ONLY]
+    lines += ["", BRIEF_SCOPE]
+    out.write("\n".join(lines) + "\n")
+    return 0
+
+
+class _Collector:
+    """load_valid_cards 의 '건너뜀' 줄을 모아 두기만 한다(다른 카드 오류로 stderr 를 어지럽히지 않게)."""
+
+    def __init__(self):
+        self.text = ""
+
+    def write(self, s):
+        self.text += s
+
+
+# ---------------------------------------------------------------------------
 # 진입점
 # ---------------------------------------------------------------------------
 
@@ -1030,6 +1424,12 @@ def main(argv=None):
     p_check.add_argument("--no-coverage", action="store_true",
                          help="미등록 폴더 검사와 PROJECTS.md 일치 검사를 건너뛴다")
     sub.add_parser("build", help="last_activity 를 갱신하고 PROJECTS.md 를 다시 만든다")
+    p_resolve = sub.add_parser("resolve", help="키워드로 후보 카드를 판정한다(읽기 전용)")
+    p_resolve.add_argument("keywords", nargs="+", metavar="키워드")
+    p_brief = sub.add_parser("brief", help="카드에서 보조 에이전트 위임 지시문을 출력한다(읽기 전용)")
+    p_brief.add_argument("name", metavar="카드이름")
+    p_brief.add_argument("--read-only", action="store_true",
+                         help="읽기 전용 위임(superseded 카드는 이 옵션이 있어야 한다)")
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
@@ -1043,6 +1443,10 @@ def main(argv=None):
         return 1
     if args.command == "check":
         return run_check(repo_root, workspace_root, coverage=not args.no_coverage)
+    if args.command == "resolve":
+        return run_resolve(repo_root, workspace_root, args.keywords)
+    if args.command == "brief":
+        return run_brief(repo_root, workspace_root, args.name, args.read_only)
     return run_build(repo_root, workspace_root)
 
 

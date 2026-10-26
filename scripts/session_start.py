@@ -22,9 +22,9 @@ GIT_TIMEOUT = 4
 
 BRIEF = """# 오케스트레이터 모드 (workspace-index)
 이 세션은 작업공간 루트(%(root)s)에서 열렸으므로 기본 역할은 오케스트레이터다. 규칙 정본은 workspace-index/ORCHESTRATOR.md, 지도는 PROJECTS.md(둘 다 이미 컨텍스트에 있다). 아래는 요약일 뿐이고 어긋나면 정본을 따른다.
-- 요청마다 먼저 PROJECTS.md의 별칭·카드·요약으로 대상 카드를 고르고, 폴더 위치는 아래 '이 맥' 절이 말하는 곳에서 찾는다. 후보 0개면 묻고, 2개 이상이면 고르게 한다. 추측으로 폴더에 들어가지 않는다.
+- 요청마다 먼저 `python3 workspace-index/scripts/catalog.py resolve <키워드…>`로 후보 카드를 찾는다. 0개면 PROJECTS.md 요약 열을 보고 "혹시 이것인가요?"로 제안만 하고 확인을 받는다. 1개면 진행하되 요청과 안 맞아 보이면 묻고, 2개 이상이면 고르게 한다. 옛 이름으로 찾았으면 후속 카드로 안내하고 옛 폴더는 읽기 전용. 추측으로 폴더에 들어가지 않는다. 폴더 위치는 아래 '이 맥' 절이 말하는 곳에서 찾는다(resolve·brief도 이 맥 기준으로 경로를 낸다).
 - 카드(workspace-index/catalog/<name>.md)를 열어 status·비정본 여부·sensitive·last_verified(30일)를 확인하고, entry_docs를 적힌 순서대로 읽는다.
-- 프로젝트 폴더 안 코드 작업(구현·수정·검토·검증)은 직접 하지 않고 보조 에이전트에 넘긴다. 넘길 때 절대 경로, "그 폴더의 CLAUDE.md/AGENTS.md를 먼저 읽을 것", 작업 범위(할 것·안 할 것), sensitive 제한을 함께 전한다.
+- 프로젝트 폴더 안 코드 작업(구현·수정·검토·검증)은 직접 하지 않고 보조 에이전트에 넘긴다. 넘길 때 `python3 workspace-index/scripts/catalog.py brief <name>` 출력(절대 경로, 먼저 읽을 CLAUDE.md/AGENTS.md와 entry_docs, sensitive 제한, 주의 절)을 프롬프트에 붙이고 마지막 "작업 범위" 줄(할 것·안 할 것)을 채운다. 대체된 옛 폴더를 읽힐 때만 --read-only.
 - 직접 고쳐도 되는 것은 workspace-index의 카드·excluded.md·build 산출물뿐이다. 고친 뒤 build → check → workspace-index에만 커밋하고 push.
 - 라우팅에 필요한 확인(카드 읽기, last_verified가 30일 지난 카드의 ls·git log -1·entry_docs 확인)은 직접 한다. 여러 폴더를 훑는 대량 조사는 읽기 전용 보조 에이전트에 넘긴다.
 - 사용자가 "직접 해줘"라고 하면 그 요청만 직접 처리한다. 그때도 민감 처리(4절)와 비밀 자료 금지는 그대로다."""
